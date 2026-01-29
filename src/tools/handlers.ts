@@ -133,6 +133,19 @@ export async function memoryStore(
   }
 ): Promise<ToolResult> {
   const now = Date.now();
+  
+  // Validate priority if provided
+  let validatedPriority = options.priority ?? 3;
+  if (options.priority !== undefined) {
+    if (options.priority < 1 || options.priority > 5) {
+      return {
+        content: `Invalid priority: ${options.priority}. Priority must be between 1 and 5.`,
+        isError: true
+      };
+    }
+    validatedPriority = options.priority;
+  }
+  
   const node: StateNode = {
     id: generateId(),
     type: options.type || "fact",
@@ -143,7 +156,7 @@ export async function memoryStore(
     tags: options.tags,
     citations: options.citations,
     relatedTo: options.relatedTo,
-    priority: options.priority ?? 3,
+    priority: validatedPriority,
     supersedes: options.supersedesId
   };
   
@@ -438,9 +451,22 @@ export async function exportContext(
     includeSymbols?: boolean;
   }
 ): Promise<ToolResult> {
-  const outputDir = options.outputPath 
-    ? path.join(ctx.projectRoot, options.outputPath, ".context-forge-export")
-    : path.join(ctx.projectRoot, ".context-forge-export");
+  // Validate outputPath to prevent path traversal
+  let outputDir: string;
+  if (options.outputPath) {
+    // Normalize and resolve the path
+    const resolvedPath = path.resolve(ctx.projectRoot, options.outputPath);
+    // Ensure the resolved path is within the project root
+    if (!resolvedPath.startsWith(ctx.projectRoot)) {
+      return {
+        content: `Invalid output path: Path must be within the project root.`,
+        isError: true
+      };
+    }
+    outputDir = path.join(resolvedPath, ".context-forge-export");
+  } else {
+    outputDir = path.join(ctx.projectRoot, ".context-forge-export");
+  }
   
   // Create export directory
   if (!fs.existsSync(outputDir)) {
@@ -622,6 +648,18 @@ export async function commitDecision(
     supersedesId?: string;
   }
 ): Promise<ToolResult> {
+  // Validate priority if provided
+  let validatedPriority = options?.priority ?? 3;
+  if (options?.priority !== undefined) {
+    if (options.priority < 1 || options.priority > 5) {
+      return {
+        content: `Invalid priority: ${options.priority}. Priority must be between 1 and 5.`,
+        isError: true
+      };
+    }
+    validatedPriority = options.priority;
+  }
+  
   const now = Date.now();
   const node: StateNode = {
     id: generateId(),
@@ -632,7 +670,7 @@ export async function commitDecision(
     lastVerified: now,
     tags: options?.tags,
     citations: options?.citations,
-    priority: options?.priority ?? 3,
+    priority: validatedPriority,
     supersedes: options?.supersedesId
   };
   

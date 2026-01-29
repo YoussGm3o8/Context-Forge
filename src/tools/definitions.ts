@@ -93,6 +93,8 @@ export const TOOL_DEFINITIONS = [
         },
         priority: {
           type: "number",
+          minimum: 1,
+          maximum: 5,
           description: "Importance level 1-5 (5 is critical, 3 is default)"
         },
         supersedes_id: {
@@ -157,6 +159,8 @@ export const TOOL_DEFINITIONS = [
         },
         priority: {
           type: "number",
+          minimum: 1,
+          maximum: 5,
           description: "Importance level 1-5 (5 is critical)"
         },
         supersedes_id: {
