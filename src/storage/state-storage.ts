@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import type { StateNode, CodeSymbol, FileIndex, SessionSummary, SqliteDatabase } from "../types.js";
+import type { StateNode, CodeSymbol, FileIndex, SessionSummary, SqliteDatabase, MemorySearchOptions, WorkspaceInfo } from "../types.js";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS state_nodes (
@@ -10,7 +10,13 @@ CREATE TABLE IF NOT EXISTS state_nodes (
   content TEXT NOT NULL,
   timestamp INTEGER NOT NULL,
   supersedes TEXT,
-  metadata TEXT
+  metadata TEXT,
+  tags TEXT,
+  created_at INTEGER,
+  last_verified INTEGER,
+  citations TEXT,
+  related_to TEXT,
+  priority INTEGER DEFAULT 3
 );
 
 CREATE TABLE IF NOT EXISTS code_symbols (
@@ -40,12 +46,23 @@ CREATE TABLE IF NOT EXISTS session_summaries (
   key_decisions TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS workspace_info (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  repo_url TEXT,
+  repo_hash TEXT,
+  branch TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_state_type ON state_nodes(type);
 CREATE INDEX IF NOT EXISTS idx_state_timestamp ON state_nodes(timestamp);
+CREATE INDEX IF NOT EXISTS idx_state_priority ON state_nodes(priority);
 CREATE INDEX IF NOT EXISTS idx_symbol_name ON code_symbols(name);
 CREATE INDEX IF NOT EXISTS idx_symbol_file ON code_symbols(file_path);
 CREATE INDEX IF NOT EXISTS idx_symbol_type ON code_symbols(type);
 `;
+
+// Default staleness threshold: 30 days in milliseconds
+const DEFAULT_STALENESS_THRESHOLD_MS = 30 * 24 * 60 * 60 * 1000;
 
 export class StateStorage {
   private db: SqliteDatabase;
@@ -66,9 +83,10 @@ export class StateStorage {
   }
 
   saveStateNode(node: StateNode): void {
+    const now = Date.now();
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO state_nodes (id, type, content, timestamp, supersedes, metadata)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO state_nodes (id, type, content, timestamp, supersedes, metadata, tags, created_at, last_verified, citations, related_to, priority)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
       node.id,
@@ -76,7 +94,13 @@ export class StateStorage {
       node.content,
       node.timestamp,
       node.supersedes || null,
-      node.metadata ? JSON.stringify(node.metadata) : null
+      node.metadata ? JSON.stringify(node.metadata) : null,
+      node.tags ? JSON.stringify(node.tags) : null,
+      node.createdAt || now,
+      node.lastVerified || now,
+      node.citations ? JSON.stringify(node.citations) : null,
+      node.relatedTo ? JSON.stringify(node.relatedTo) : null,
+      node.priority ?? 3
     );
   }
 
@@ -92,7 +116,7 @@ export class StateStorage {
       SELECT * FROM state_nodes 
       WHERE type = 'decision' 
       AND id NOT IN (SELECT supersedes FROM state_nodes WHERE supersedes IS NOT NULL)
-      ORDER BY timestamp DESC
+      ORDER BY priority DESC, timestamp DESC
     `);
     const rows = stmt.all() as Record<string, unknown>[];
     return rows.map(row => this.rowToStateNode(row));
@@ -100,7 +124,7 @@ export class StateStorage {
 
   getAllFacts(): StateNode[] {
     const stmt = this.db.prepare(`
-      SELECT * FROM state_nodes WHERE type = 'fact' ORDER BY timestamp DESC
+      SELECT * FROM state_nodes WHERE type = 'fact' ORDER BY priority DESC, timestamp DESC
     `);
     const rows = stmt.all() as Record<string, unknown>[];
     return rows.map(row => this.rowToStateNode(row));
@@ -113,7 +137,145 @@ export class StateStorage {
       content: row.content as string,
       timestamp: row.timestamp as number,
       supersedes: row.supersedes as string | undefined,
-      metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined
+      metadata: row.metadata ? JSON.parse(row.metadata as string) : undefined,
+      tags: row.tags ? JSON.parse(row.tags as string) : undefined,
+      createdAt: row.created_at as number | undefined,
+      lastVerified: row.last_verified as number | undefined,
+      citations: row.citations ? JSON.parse(row.citations as string) : undefined,
+      relatedTo: row.related_to ? JSON.parse(row.related_to as string) : undefined,
+      priority: row.priority as number | undefined
+    };
+  }
+
+  // Get all facts and decisions for bootstrap
+  getBootstrapData(): StateNode[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM state_nodes 
+      WHERE (type = 'fact' OR type = 'decision')
+      AND id NOT IN (SELECT supersedes FROM state_nodes WHERE supersedes IS NOT NULL)
+      ORDER BY priority DESC, timestamp DESC
+    `);
+    const rows = stmt.all() as Record<string, unknown>[];
+    return rows.map(row => this.rowToStateNode(row));
+  }
+
+  // Search by tags with filtering
+  searchByTags(options: MemorySearchOptions): StateNode[] {
+    let query = `
+      SELECT * FROM state_nodes 
+      WHERE (type = 'fact' OR type = 'decision')
+      AND id NOT IN (SELECT supersedes FROM state_nodes WHERE supersedes IS NOT NULL)
+    `;
+    const params: unknown[] = [];
+
+    if (options.minPriority !== undefined) {
+      query += ` AND priority >= ?`;
+      params.push(options.minPriority);
+    }
+
+    query += ` ORDER BY priority DESC, timestamp DESC`;
+
+    if (options.limit !== undefined) {
+      query += ` LIMIT ?`;
+      params.push(options.limit);
+    }
+
+    const stmt = this.db.prepare(query);
+    const rows = stmt.all(...params) as Record<string, unknown>[];
+    let results = rows.map(row => this.rowToStateNode(row));
+
+    // Filter by tags in JavaScript (SQLite JSON functions are limited)
+    if (options.tags && options.tags.length > 0) {
+      results = results.filter(node => {
+        if (!node.tags) return false;
+        return options.tags!.some(tag => node.tags!.includes(tag));
+      });
+    }
+
+    // Filter out stale entries if requested
+    if (!options.includeStale) {
+      const now = Date.now();
+      results = results.filter(node => {
+        const lastVerified = node.lastVerified || node.createdAt || node.timestamp;
+        return (now - lastVerified) < DEFAULT_STALENESS_THRESHOLD_MS;
+      });
+    }
+
+    return results;
+  }
+
+  // Get related facts
+  getRelatedFacts(factId: string): StateNode[] {
+    const fact = this.getStateNode(factId);
+    if (!fact || !fact.relatedTo || fact.relatedTo.length === 0) {
+      return [];
+    }
+
+    const placeholders = fact.relatedTo.map(() => '?').join(',');
+    const stmt = this.db.prepare(`
+      SELECT * FROM state_nodes WHERE id IN (${placeholders})
+    `);
+    const rows = stmt.all(...fact.relatedTo) as Record<string, unknown>[];
+    return rows.map(row => this.rowToStateNode(row));
+  }
+
+  // Get facts by citation path
+  getFactsByCitation(filePath: string): StateNode[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM state_nodes 
+      WHERE citations IS NOT NULL
+      AND (type = 'fact' OR type = 'decision')
+    `);
+    const rows = stmt.all() as Record<string, unknown>[];
+    const allNodes = rows.map(row => this.rowToStateNode(row));
+    
+    return allNodes.filter(node => {
+      if (!node.citations) return false;
+      return node.citations.some(citation => citation.includes(filePath));
+    });
+  }
+
+  // Mark a fact as verified
+  verifyFact(factId: string): boolean {
+    const stmt = this.db.prepare(`
+      UPDATE state_nodes SET last_verified = ? WHERE id = ?
+    `);
+    const result = stmt.run(Date.now(), factId);
+    return result.changes > 0;
+  }
+
+  // Get stale facts (older than threshold)
+  getStaleFacts(thresholdDays: number = 30): StateNode[] {
+    const thresholdMs = thresholdDays * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - thresholdMs;
+    
+    const stmt = this.db.prepare(`
+      SELECT * FROM state_nodes 
+      WHERE (type = 'fact' OR type = 'decision')
+      AND (last_verified < ? OR (last_verified IS NULL AND created_at < ?) OR (last_verified IS NULL AND created_at IS NULL AND timestamp < ?))
+      ORDER BY last_verified ASC, created_at ASC, timestamp ASC
+    `);
+    const rows = stmt.all(cutoff, cutoff, cutoff) as Record<string, unknown>[];
+    return rows.map(row => this.rowToStateNode(row));
+  }
+
+  // Workspace info methods
+  saveWorkspaceInfo(info: WorkspaceInfo): void {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO workspace_info (id, repo_url, repo_hash, branch)
+      VALUES (1, ?, ?, ?)
+    `);
+    stmt.run(info.repoUrl || null, info.repoHash || null, info.branch || null);
+  }
+
+  getWorkspaceInfo(): WorkspaceInfo | null {
+    const stmt = this.db.prepare("SELECT * FROM workspace_info WHERE id = 1");
+    const row = stmt.get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      repoUrl: row.repo_url as string | undefined,
+      repoHash: row.repo_hash as string | undefined,
+      branch: row.branch as string | undefined
     };
   }
 

@@ -12,6 +12,7 @@ import { ASTIndexer, FileWatcher } from "./ast/index.js";
 import { OllamaClient } from "./utils/ollama.js";
 import {
   TOOL_DEFINITIONS,
+  // Original handlers
   getCodebaseMap,
   searchSemantics,
   getDependencyGraph,
@@ -20,6 +21,17 @@ import {
   resumeSession,
   summarizeLongHistory,
   updateProjectState,
+  // New feature handlers
+  bootstrap,
+  memorySearch,
+  memoryStore,
+  memoryAsk,
+  verifyFact,
+  getStaleFacts,
+  validateCitations,
+  getRelatedFacts,
+  getAffectedFacts,
+  exportContext,
   type ToolContext
 } from "./tools/index.js";
 
@@ -107,11 +119,44 @@ class ContextForgeServer {
     args: Record<string, unknown>
   ): Promise<{ content: string; isError?: boolean }> {
     switch (name) {
+      // Feature 1: Bootstrap - Auto-load on session start
+      case "bootstrap":
+        return bootstrap(this.toolContext);
+      
       case "get_codebase_map":
         return getCodebaseMap(this.toolContext, args.module_path as string);
       
       case "search_semantics":
         return searchSemantics(this.toolContext, args.query as string);
+      
+      // Feature 2: Memory search with tags filtering
+      case "memory_search":
+        return memorySearch(this.toolContext, {
+          tags: args.tags as string[] | undefined,
+          limit: args.limit as number | undefined,
+          includeStale: args.include_stale as boolean | undefined,
+          minPriority: args.min_priority as number | undefined
+        });
+      
+      // Feature 2, 3, 5, 9: Memory store with tags, priority, citations, relations
+      case "memory_store":
+        return memoryStore(this.toolContext, {
+          content: args.content as string,
+          type: args.type as "fact" | "decision" | undefined,
+          tags: args.tags as string[] | undefined,
+          citations: args.citations as string[] | undefined,
+          relatedTo: args.related_to as string[] | undefined,
+          priority: args.priority as number | undefined,
+          supersedesId: args.supersedes_id as string | undefined
+        });
+      
+      // Feature 10: Natural language querying
+      case "memory_ask":
+        return memoryAsk(
+          this.toolContext,
+          args.question as string,
+          args.limit as number | undefined
+        );
       
       case "get_dependency_graph":
         return getDependencyGraph(this.toolContext, args.target as string);
@@ -120,7 +165,12 @@ class ContextForgeServer {
         return commitDecision(
           this.toolContext,
           args.fact as string,
-          args.supersedes_id as string | undefined
+          {
+            tags: args.tags as string[] | undefined,
+            citations: args.citations as string[] | undefined,
+            priority: args.priority as number | undefined,
+            supersedesId: args.supersedes_id as string | undefined
+          }
         );
       
       case "fetch_active_decisions":
@@ -128,6 +178,32 @@ class ContextForgeServer {
       
       case "resume_session":
         return resumeSession(this.toolContext);
+      
+      // Feature 3: Staleness tracking
+      case "verify_fact":
+        return verifyFact(this.toolContext, args.fact_id as string);
+      
+      case "get_stale_facts":
+        return getStaleFacts(this.toolContext, args.days as number | undefined);
+      
+      // Feature 4: Citation validation
+      case "validate_citations":
+        return validateCitations(this.toolContext, args.fact_id as string | undefined);
+      
+      // Feature 5: Fact linking
+      case "get_related_facts":
+        return getRelatedFacts(this.toolContext, args.fact_id as string);
+      
+      // Feature 8: Diff-aware updates
+      case "get_affected_facts":
+        return getAffectedFacts(this.toolContext, args.file_path as string);
+      
+      // Feature 7: Export to repo
+      case "export_context":
+        return exportContext(this.toolContext, {
+          outputPath: args.output_path as string | undefined,
+          includeSymbols: args.include_symbols as boolean | undefined
+        });
       
       case "summarize_long_history":
         return summarizeLongHistory(
