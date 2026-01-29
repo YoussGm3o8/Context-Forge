@@ -83,7 +83,7 @@ export async function searchSemantics(
     type: r.type as SearchResult["type"],
     id: r.id,
     content: r.content,
-    score: 1 - (i * 0.1)
+    score: Math.max(0.1, 1 - (i * 0.05))
   }));
   
   const lines = [`Search results for "${query}":\n`];

@@ -108,7 +108,7 @@ export class ASTIndexer {
     
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.name.startsWith(".") && entry.name !== ".") continue;
+      if (entry.name.startsWith(".")) continue;
       if (IGNORE_DIRS.has(entry.name)) continue;
       if (IGNORE_FILES.has(entry.name)) continue;
 

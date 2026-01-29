@@ -149,8 +149,13 @@ class ContextForgeServer {
     console.error(`Project root: ${PROJECT_ROOT}`);
 
     console.error("Indexing project...");
-    const indexResult = await this.indexer.indexProject();
-    console.error(`Indexed ${indexResult.indexed} files, ${indexResult.symbols} symbols`);
+    try {
+      const indexResult = await this.indexer.indexProject();
+      console.error(`Indexed ${indexResult.indexed} files, ${indexResult.symbols} symbols`);
+    } catch (error) {
+      console.error(`Warning: Indexing failed - ${error instanceof Error ? error.message : "Unknown error"}`);
+      console.error("Server will continue with empty index");
+    }
 
     if (!this.stateFile.exists()) {
       const state = this.stateFile.createDefault();

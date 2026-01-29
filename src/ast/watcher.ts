@@ -58,8 +58,8 @@ export class FileWatcher {
 
     const timer = setTimeout(() => {
       this.debounceTimers.delete(filePath);
-      this.indexer.indexFile(filePath).catch(() => {
-        // Silently handle indexing errors for watched files
+      this.indexer.indexFile(filePath).catch((error) => {
+        console.error(`Failed to index ${filePath}: ${error instanceof Error ? error.message : "Unknown error"}`);
       });
     }, 100);
 
