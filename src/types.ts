@@ -7,6 +7,13 @@ export interface StateNode {
   timestamp: number;
   supersedes?: string;
   metadata?: Record<string, unknown>;
+  // New fields for enhanced features
+  tags?: string[];
+  createdAt?: number;
+  lastVerified?: number;
+  citations?: string[];
+  relatedTo?: string[];
+  priority?: number; // 1-5, where 5 is highest priority
 }
 
 export interface CodeSymbol {
@@ -51,6 +58,22 @@ export interface SearchResult {
   content: string;
   score: number;
   context?: string;
+  tags?: string[];
+  priority?: number;
+  isStale?: boolean;
+}
+
+export interface MemorySearchOptions {
+  tags?: string[];
+  limit?: number;
+  includeStale?: boolean;
+  minPriority?: number;
+}
+
+export interface WorkspaceInfo {
+  repoUrl?: string;
+  repoHash?: string;
+  branch?: string;
 }
 
 export type SqliteDatabase = Database.Database;
