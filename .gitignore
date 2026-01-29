@@ -7,3 +7,4 @@ dist/
 *.db-journal
 coverage/
 .vitest/
+.context-forge/
