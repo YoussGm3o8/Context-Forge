@@ -40,6 +40,12 @@ Set these environment variables:
 | `summarize_long_history` | Compresses conversation to briefing |
 | `update_project_state` | Updates STATE.json with current stats |
 
+## AI Agent Instructions
+
+For detailed instructions on how AI agents should use Context-Forge, see [AGENT_INSTRUCTIONS.md](./AGENT_INSTRUCTIONS.md).
+
+**Quick Start for AI Agents**: Always call `resume_session` at the beginning of each new session to restore project context.
+
 ## Usage with Claude Desktop
 
 Add to your MCP settings:
